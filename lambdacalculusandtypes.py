@@ -6,40 +6,53 @@ from abc import ABC, abstractmethod
 
 
 class LambdaTerm:
-    """
-    If this is a variable, then variable will be that variable as a string, left and right will be None.
-    If this is an application, then variable will be None, left and right will be as expected.
-    If this is an abstraction, then variable will be the abstracted variable as a string,
-    left will be the largest proper subterm, and right will be None.
+    """A term from Lambda calculus.
 
-    To initialize, leave the arguments that should be None as None.
+    === Public Attributes ===
+    variable:
+        If self is a variable, then this will be that variable as a string.
+        If self is an application, then this will be the empty string.
+        If self is an abstraction, then this will be the abstracted variable as a string.
+    left_subterm:
+        If self is a variable, then this will be None.
+        If self is an application, then this will be as expected.
+        If self is an abstraction, then this will be the largest proper subterm.
+    right_subterm:
+        If self is a variable or abstraction, then this will be None.
+        If self is an application, then this will be as expected.
     """
-    variable: Optional[str]
+    variable: str
     left_subterm: Optional['LambdaTerm']
     right_subterm: Optional['LambdaTerm']
 
-    def __init__(self, variable: Optional[str] = None, left: Optional['LambdaTerm'] = None,
-                 right: Optional['LambdaTerm'] = None):
+    def __init__(self, variable: str = '', left: Optional['LambdaTerm'] = None, right: Optional['LambdaTerm'] = None):
+        """Initialize this LambdaTerm.
+
+        :param variable: If self is to be a variable, then this should be that variable as a string.
+        If self is to be an application, then this should be the empty string.
+        If self is to be an abstraction, then this should be the abstracted variable as a string.
+        :param left: If self is to be a variable, then this should be None.
+        If self is to be an application, then this should be as expected.
+        If self is to be an abstraction, then this should be the largest proper subterm.
+        :param right: If self is to be a variable or abstraction, then this should be None.
+        If self is to be an application, then this should be as expected.
+        """
+        self.variable = variable
+        self.left_subterm = left
+
         # variable or abstraction
-        if variable is not None:
-            self.variable = variable
-            self.left_subterm = left
+        if variable:
             self.right_subterm = None
         # application
         elif left is not None and right is not None:
-            self.variable = None
-            self.left_subterm = left
             self.right_subterm = right
         else:
-            print('Fuck you')
-            self.variable = 'x'
-            self.left_subterm = None
-            self.right_subterm = None
+            raise ValueError('The inputs do not correspond to a variable, application, or abstraction.')
 
     def __str__(self):
-        r"""
+        r"""A string respresentation of this lambda term that can be parsed by LaTeX.
 
-        :return:
+        :return: a string respresentation of this lambda term that can be parsed by LaTeX
 
         >>> l = string_to_lambda_term(r'\lambda y.y')
         >>> print(l)
@@ -50,6 +63,9 @@ class LambdaTerm:
         >>> l = string_to_lambda_term(r'\lambda xy.xyy')
         >>> print(l)
         \lambda xy.xyy
+        >>> l = string_to_lambda_term(r'\lambda xyz.xyy')
+        >>> print(l)
+        \lambda xyz.xyy
         >>> l = string_to_lambda_term(r'x(\lambda x.x)\lambda x.x')
         >>> print(l)
         x(\lambda x.x)(\lambda x.x)
@@ -88,7 +104,7 @@ class LambdaTerm:
         """
         :return: True iff it is an application.
         """
-        return self.variable is None
+        return not self.variable
 
     def is_abstraction(self) -> bool:
         """
@@ -514,7 +530,7 @@ def string_to_combinatory_logic_term(term_string: str) -> CombinatoryLogicTerm:
         return CombinatoryLogicTerm(variable=term_string)
 
     start_of_second_subterm: int = -1
-    open_parentheses: int = 1 if term_string[-1] == ')' else 0
+    open_parentheses: int = 1 if term_string.endswith(')') else 0
     while open_parentheses:
         start_of_second_subterm -= 1
         if term_string[start_of_second_subterm] == '(':
@@ -606,7 +622,7 @@ def string_to_type(type_string: str) -> SimpleType:
     >>> print(s)
     (A>A>B)>A>B
     """
-    if type_string[-1] == ')':
+    if type_string.endswith(')'):
         type_string = type_string[1:-1]
 
     if '>' not in type_string:
@@ -1073,7 +1089,7 @@ def principal_type_algorithm(lambda_term: LambdaTerm,
 
     unifier: Optional[TypeSubstitution] = sequence_most_general_unifier(left_types, right_types,
                                                                         ((left_sub_deduction.type_variables()
-                                                                         | right_sub_deduction.type_variables())
+                                                                          | right_sub_deduction.type_variables())
                                                                          - mgu_domain))
     if unifier is None:
         return None
