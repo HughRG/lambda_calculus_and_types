@@ -1,6 +1,6 @@
 """A module to aid in Lambda Calculus and Types computations."""
 
-from typing import Union, Optional, Iterable
+from typing import Union, Optional, Iterable, Mapping
 from frozendict import frozendict
 from abc import ABC, abstractmethod
 
@@ -25,48 +25,49 @@ class LambdaTerm:
     left_subterm: Optional['LambdaTerm']
     right_subterm: Optional['LambdaTerm']
 
-    def __init__(self, variable: str = '', left: Optional['LambdaTerm'] = None, right: Optional['LambdaTerm'] = None):
+    def __init__(self, variable: str = '',
+                 left_subterm: Optional['LambdaTerm'] = None, right_subterm: Optional['LambdaTerm'] = None) -> None:
         """Initialize this LambdaTerm.
 
         :param variable: If self is to be a variable, then this should be that variable as a string.
         If self is to be an application, then this should be the empty string.
         If self is to be an abstraction, then this should be the abstracted variable as a string.
-        :param left: If self is to be a variable, then this should be None.
+        :param left_subterm: If self is to be a variable, then this should be None.
         If self is to be an application, then this should be as expected.
         If self is to be an abstraction, then this should be the largest proper subterm.
-        :param right: If self is to be a variable or abstraction, then this should be None.
+        :param right_subterm: If self is to be a variable or abstraction, then this should be None.
         If self is to be an application, then this should be as expected.
         """
-        self.variable = variable
-        self.left_subterm = left
-
         # variable or abstraction
         if variable:
-            self.right_subterm = None
+            if right_subterm is not None:
+                raise ValueError('The inputs do not correspond to a variable, application, or abstraction.')
         # application
-        elif left is not None and right is not None:
-            self.right_subterm = right
-        else:
+        elif left_subterm is None or right_subterm is None:
             raise ValueError('The inputs do not correspond to a variable, application, or abstraction.')
+
+        self.variable = variable
+        self.left_subterm = left_subterm
+        self.right_subterm = right_subterm
 
     def __str__(self):
         r"""A string respresentation of this lambda term that can be parsed by LaTeX.
 
         :return: a string respresentation of this lambda term that can be parsed by LaTeX
 
-        >>> l = string_to_lambda_term(r'\lambda y.y')
+        >>> l = LambdaTerm.string_to_lambda_term(r'\lambda y.y')
         >>> print(l)
         \lambda y.y
-        >>> l = string_to_lambda_term(r'(\lambda y.y)x')
+        >>> l = LambdaTerm.string_to_lambda_term(r'(\lambda y.y)x')
         >>> print(l)
         (\lambda y.y)x
-        >>> l = string_to_lambda_term(r'\lambda xy.xyy')
+        >>> l = LambdaTerm.string_to_lambda_term(r'\lambda xy.xyy')
         >>> print(l)
         \lambda xy.xyy
-        >>> l = string_to_lambda_term(r'\lambda xyz.xyy')
+        >>> l = LambdaTerm.string_to_lambda_term(r'\lambda xyz.xyy')
         >>> print(l)
         \lambda xyz.xyy
-        >>> l = string_to_lambda_term(r'x(\lambda x.x)\lambda x.x')
+        >>> l = LambdaTerm.string_to_lambda_term(r'x(\lambda x.x)\lambda x.x')
         >>> print(l)
         x(\lambda x.x)(\lambda x.x)
         """
@@ -87,37 +88,132 @@ class LambdaTerm:
             return string_representation_of_first_term + f'({self.right_subterm})'
         return string_representation_of_first_term + str(self.right_subterm)
 
-    def __hash__(self):
-        return hash((self.variable, self.left_subterm, self.right_subterm))
+    def __eq__(self, other) -> bool:
+        """True iff other is a term that is equal to self under alpha conversion.
 
-    def __eq__(self, other):
-        return isinstance(other, LambdaTerm) and (self.variable, self.left_subterm, self.right_subterm) == (
-            other.variable, other.left_subterm, other.right_subterm)
+        :param other: an object
+        :return: True iff other is a term that is equal to self under alpha conversion.
+
+        >>> LambdaTerm.string_to_lambda_term(r'\lambda x.x') == LambdaTerm.string_to_lambda_term(r'\lambda y.y')
+        True
+        >>> LambdaTerm.string_to_lambda_term(r'\lambda x.x') == LambdaTerm.string_to_lambda_term(r'\lambda y.x')
+        False
+        """
+        if not isinstance(other, LambdaTerm):
+            return False
+
+        self_free_variables: frozenset[str] = self.free_variables()
+        if other.free_variables() != self_free_variables:
+            return False
+
+        if self.is_variable() or other.is_variable():
+            return self.is_variable() and other.is_variable()
+
+        if self.is_application() or other.is_application():
+            if not self.is_application() and other.is_application():
+                return False
+            return self.left_subterm == other.left_subterm and self.right_subterm == other.right_subterm
+
+        if self.variable == other.variable:
+            return self.left_subterm == other.left_subterm
+
+        other_converted_subterm = other.left_subterm.substitute(LambdaTerm(variable=self.variable), other.variable)
+
+        return self.left_subterm == other_converted_subterm
+
+    @classmethod
+    def string_to_lambda_term(cls, lambda_term_string: str) -> 'LambdaTerm':
+        r"""Given a string representing a lambda term, return the represented term.
+
+        :param lambda_term_string: A string representing a lambda term where variables are one character
+        and there are no extra parentheses.
+        :return: The LambdaTerm represented by lambda_term_string.
+
+        >>> l = LambdaTerm.string_to_lambda_term(r'\lambda y.y')
+        >>> print(l)
+        \lambda y.y
+        >>> l = LambdaTerm.string_to_lambda_term(r'(\lambda y.y)x')
+        >>> print(l)
+        (\lambda y.y)x
+        """
+        # if it's a variable
+        if len(lambda_term_string) == 1:
+            return cls(variable=lambda_term_string)
+
+        # if it's an abstraction
+        if lambda_term_string.startswith(r'\lambda '):
+            end_of_abstracted_variables = lambda_term_string.find('.')
+            if end_of_abstracted_variables == 9:
+                return cls(variable=lambda_term_string[8],
+                           left_subterm=cls.string_to_lambda_term(lambda_term_string[10:]))
+            return cls(variable=lambda_term_string[8],
+                       left_subterm=cls.string_to_lambda_term(fr'\lambda {lambda_term_string[9:]}'))
+
+        # if it's an application
+        application_string_list: list[str] = cls.split_lambda_term_string_into_applications(lambda_term_string)
+        application_list: list[cls] = [cls.string_to_lambda_term(term_string)
+                                       for term_string in application_string_list]
+        application_list.reverse()
+        current_term: cls = application_list.pop()
+        while application_list:
+            current_term = cls(left_subterm=current_term, right_subterm=application_list.pop())
+        return current_term
+
+    @classmethod
+    def split_lambda_term_string_into_applications(cls, lambda_term_string: str) -> list[str]:
+        """Given a string representing a lambda term,
+        it maximally splits the string into a list of the form [s, t, u, v, w],
+        where each entry is a string representing a subterm of the original term,
+        and such that for s', t', u', v', w' being the terms represented by the entries,
+        the original term equals s't'u'v'w'
+
+        :param lambda_term_string: a string representing a lambda term
+        :return: if lambda_term_string is of the form stuvw it returns [s, t, u, v, w]
+        """
+        if not lambda_term_string:
+            return []
+
+        # if the term is just one abstraction
+        if lambda_term_string.startswith(r'\lambda '):
+            return [lambda_term_string]
+
+        # if it starts with a variable
+        if not lambda_term_string.startswith('('):
+            return [lambda_term_string[0]] + cls.split_lambda_term_string_into_applications(lambda_term_string[1:])
+
+        # if it starts with an open parenthesis
+        end_of_first_term: int = 0
+        open_parentheses: int = 1
+        while open_parentheses:
+            end_of_first_term += 1
+            if lambda_term_string[end_of_first_term] == '(':
+                open_parentheses += 1
+            elif lambda_term_string[end_of_first_term] == ')':
+                open_parentheses -= 1
+        return ([lambda_term_string[1:end_of_first_term]]
+                + cls.split_lambda_term_string_into_applications(lambda_term_string[end_of_first_term + 1:]))
 
     def is_variable(self) -> bool:
-        """
-        :return: True iff it is a variable.
-        """
+        """:return: True iff it is a variable."""
         return self.left_subterm is None
 
     def is_application(self) -> bool:
-        """
-        :return: True iff it is an application.
-        """
+        """:return: True iff it is an application."""
         return not self.variable
 
     def is_abstraction(self) -> bool:
-        """
-        :return: True iff it is an abstraction.
-        """
-        return self.variable is not None and self.left_subterm is not None
+        """:return: True iff it is an abstraction."""
+        return self.variable and self.left_subterm is not None
 
-    def free_variables(self) -> frozenset:
-        """
-        :return: the free variables in the term
+    def free_variables(self) -> frozenset[str]:
+        """:return: the free variables in the term
 
-        >>> t = string_to_lambda_term(r'\lambda n.(\lambda m.(\lambda nmf.n(mf))mm)((\lambda nfx.n(\lambda th.h(tf))(\lambda g.x)(\lambda y.y))n)')
-        >>> t.free_variables()
+        >>> LambdaTerm(variable='x').free_variables()
+        frozenset({'x'})
+        >>> LambdaTerm.string_to_lambda_term(r'\lambda x.zxzy').free_variables() == frozenset({'y', 'z'})
+        True
+        >>> LambdaTerm.string_to_lambda_term(r'\lambda n.(\lambda m.(\lambda nmf.n(mf))mm)'
+        ...                       + r'((\lambda nfx.n(\lambda th.h(tf))(\lambda g.x)(\lambda y.y))n)').free_variables()
         frozenset()
         """
         if self.is_variable():
@@ -127,17 +223,11 @@ class LambdaTerm:
         return self.left_subterm.free_variables() - frozenset(self.variable)
 
     def is_beta_redex(self) -> bool:
-        """
-
-        :return: True iff if self is a beta redex.
-        """
+        """:return: True iff if self is a beta redex."""
         return self.is_application() and self.left_subterm.is_abstraction()
 
     def is_beta_normal_form(self) -> bool:
-        """
-
-        :return: True iff if self is in beta normal form.
-        """
+        """:return: True iff if self is in beta normal form."""
         if self.is_variable():
             return True
         if self.is_abstraction():
@@ -147,55 +237,62 @@ class LambdaTerm:
         # It's an application
         return self.left_subterm.is_beta_normal_form() and self.right_subterm.is_beta_normal_form()
 
-    def substitution(self, term: 'LambdaTerm', variable: str) -> 'LambdaTerm':
-        """
+    def substitute(self, term: 'LambdaTerm', variable: str) -> 'LambdaTerm':
+        """Return the result of substituting all free occurences of variable with term.
 
-        :param term:
-        :param variable:
+        :param term: to substitute in
+        :param variable: to be substituted
         :return: the result of substituting all free occurences of variable with term
         """
-        if variable not in self.free_variables():
-            return self
         if self.is_variable():
-            return term
+            if self.variable == variable:
+                return term
+            return self
         if self.is_application():
-            return LambdaTerm(left=self.left_subterm.substitution(term, variable),
-                              right=self.right_subterm.substitution(term, variable))
-        return LambdaTerm(variable=self.variable, left=self.left_subterm.substitution(term, variable))
+            return LambdaTerm(left_subterm=self.left_subterm.substitute(term, variable),
+                              right_subterm=self.right_subterm.substitute(term, variable))
+        if self.variable == variable:
+            return self
+        return LambdaTerm(variable=self.variable, left_subterm=self.left_subterm.substitute(term, variable))
 
-    def leftmost_reduction(self) -> 'LambdaTerm':
-        """
+    def leftmost_beta_reduction(self) -> tuple['LambdaTerm', bool]:
+        """:return: a tuple whose first element itself if it's in beta normal form
+        and the result of a leftmost reduction otherwise,
+        and whose second element is False iff self is in beta normal form
 
-        :return: self if it's in beta normal form, and the result of a leftmost reduction otherwise.
-
-        >>> omega = string_to_lambda_term(r'(\lambda x.xx)\lambda x.xx')
-        >>> omega.leftmost_reduction() == omega
+        >>> omega = LambdaTerm.string_to_lambda_term(r'(\lambda x.xx)\lambda x.xx')
+        >>> omega_reduct, omega_reduced = omega.leftmost_beta_reduction()
+        >>> omega_reduct == omega and omega_reduced
         True
         """
-        if self.is_beta_normal_form():
-            return self
+        if self.is_variable():
+            return self, False
+        if self.is_beta_redex():
+            return self.left_subterm.left_subterm.substitute(self.right_subterm, self.left_subterm.variable), True
+        reduct, reduced = self.left_subterm.leftmost_beta_reduction()
         if self.is_abstraction():
-            return LambdaTerm(variable=self.variable, left=self.left_subterm.leftmost_reduction())
-        if self.left_subterm.is_abstraction():
-            return self.left_subterm.left_subterm.substitution(self.right_subterm, self.left_subterm.variable)
-        if self.left_subterm.is_beta_normal_form():
-            return LambdaTerm(left=self.left_subterm, right=self.right_subterm.leftmost_reduction())
-        return LambdaTerm(left=self.left_subterm.leftmost_reduction(), right=self.right_subterm)
+            return LambdaTerm(variable=self.variable, left_subterm=reduct), reduced
+        if reduced:
+            return LambdaTerm(left_subterm=reduct, right_subterm=self.right_subterm), True
+        reduct, reduced = self.right_subterm.leftmost_beta_reduction()
+        return LambdaTerm(left_subterm=self.left_subterm, right_subterm=reduct), reduced
 
     def is_eta_redex(self) -> bool:
-        """
+        """:return: True iff if self is a eta redex.
 
-        :return: True iff if self is a eta redex.
+        >>> LambdaTerm.string_to_lambda_term(r'\lambda x.yx').is_eta_redex()
+        True
+        >>> LambdaTerm.string_to_lambda_term(r'\lambda x.xy').is_eta_redex()
+        False
+        >>> LambdaTerm.string_to_lambda_term(r'\lambda x.xx').is_eta_redex()
+        False
         """
         return (self.is_abstraction() and self.left_subterm.is_application()
-                and self.left_subterm.right_subterm.is_variable()
-                and self.variable == self.left_subterm.right_subterm.variable)
+                and self.variable == self.left_subterm.right_subterm.variable
+                and self.variable not in self.left_subterm.left_subterm.free_variables())
 
     def is_beta_eta_normal_form(self) -> bool:
-        """
-
-        :return: True iff if self is in beta-eta normal form.
-        """
+        """:return: True iff if self is in beta-eta normal form."""
         if self.is_variable():
             return True
         if self.is_beta_redex() or self.is_eta_redex():
@@ -203,114 +300,74 @@ class LambdaTerm:
         return (self.left_subterm.is_beta_eta_normal_form()
                 and (self.is_abstraction() or self.right_subterm.is_beta_eta_normal_form()))
 
-    def leftmost_beta_eta_reduction(self) -> 'LambdaTerm':
-        """
+    def leftmost_beta_eta_reduction(self) -> tuple['LambdaTerm', bool]:
+        """:return: a tuple whose first element itself if it's in beta eta normal form
+        and the result of a leftmost beta eta reduction otherwise,
+        and whose second element is False iff self is in beta eta normal form
 
-        :return: self if it's in beta eta normal form, and the result of a leftmost beta eta reduction otherwise.
+        >>> omega = LambdaTerm.string_to_lambda_term(r'(\lambda x.xx)\lambda x.xx')
+        >>> omega_reduct, omega_reduced = omega.leftmost_beta_eta_reduction()
+        >>> omega_reduct == omega and omega_reduced
+        True
         """
-        if self.is_beta_eta_normal_form():
-            return self
+        if self.is_variable():
+            return self, False
         if self.is_beta_redex():
-            self.left_subterm.substitution(self.right_subterm, self.left_subterm.variable)
+            return self.left_subterm.left_subterm.substitute(self.right_subterm, self.left_subterm.variable), True
         if self.is_eta_redex():
-            return self.left_subterm.left_subterm
+            return self.left_subterm.left_subterm, True
+        reduct, reduced = self.left_subterm.leftmost_beta_eta_reduction()
         if self.is_abstraction():
-            return LambdaTerm(variable=self.variable, left=self.left_subterm.leftmost_reduction())
-        if self.left_subterm.is_beta_eta_normal_form():
-            return LambdaTerm(left=self.left_subterm, right=self.right_subterm.leftmost_reduction())
-        return LambdaTerm(left=self.left_subterm.leftmost_reduction(), right=self.right_subterm)
-
-
-def split_lambda_term_string_into_applications(lambda_term_string: str) -> list[str]:
-    """
-
-    :param lambda_term_string: a string representing a lambda term
-    :return: if lambda_term_string is of the form stuvw it returns [s, t, u, v, w]
-    """
-    if not lambda_term_string:
-        return []
-
-    # if the term is just one abstraction
-    if lambda_term_string.startswith(r'\lambda '):
-        return [lambda_term_string]
-
-    # if it starts with a variable
-    if lambda_term_string[0] != '(':
-        return [lambda_term_string[0]] + split_lambda_term_string_into_applications(lambda_term_string[1:])
-
-    # if it starts with an open parenthesis
-    end_of_first_term: int = 0
-    open_parentheses: int = 1
-    while open_parentheses:
-        end_of_first_term += 1
-        if lambda_term_string[end_of_first_term] == '(':
-            open_parentheses += 1
-        elif lambda_term_string[end_of_first_term] == ')':
-            open_parentheses -= 1
-    return [lambda_term_string[1:end_of_first_term]] + split_lambda_term_string_into_applications(
-        lambda_term_string[end_of_first_term + 1:])
-
-
-def string_to_lambda_term(lambda_term_string: str) -> LambdaTerm:
-    r"""
-
-    :param lambda_term_string: A string representing a lambda term where variables are one character
-    and there are no extra parentheses.
-    :return: The LambdaTerm represented by lambda_term_string.
-
-    >>> l = string_to_lambda_term(r'\lambda y.y')
-    >>> print(l)
-    \lambda y.y
-    >>> l = string_to_lambda_term(r'(\lambda y.y)x')
-    >>> print(l)
-    (\lambda y.y)x
-    """
-    # if it's a variable
-    if len(lambda_term_string) == 1:
-        return LambdaTerm(variable=lambda_term_string)
-
-    # if it's an abstraction
-    if lambda_term_string.startswith(r'\lambda '):
-        end_of_abstracted_variables = lambda_term_string.find('.')
-        if end_of_abstracted_variables == 9:
-            return LambdaTerm(variable=lambda_term_string[8],
-                              left=string_to_lambda_term(lambda_term_string[10:]))
-        return LambdaTerm(variable=lambda_term_string[8],
-                          left=string_to_lambda_term(fr'\lambda {lambda_term_string[9:]}'))
-
-    # if it's an application
-    application_string_list: list[str] = split_lambda_term_string_into_applications(lambda_term_string)
-    application_list: list[LambdaTerm] = [string_to_lambda_term(term_string) for term_string in application_string_list]
-    application_list.reverse()
-    current_term: LambdaTerm = application_list.pop()
-    while application_list:
-        current_term = LambdaTerm(left=current_term, right=application_list.pop())
-    return current_term
+            return LambdaTerm(variable=self.variable, left_subterm=reduct), reduced
+        if reduced:
+            return LambdaTerm(left_subterm=reduct, right_subterm=self.right_subterm), True
+        reduct, reduced = self.right_subterm.leftmost_beta_eta_reduction()
+        return LambdaTerm(left_subterm=self.left_subterm, right_subterm=reduct), reduced
 
 
 class ProofTree(ABC):
-    """
-    A proof tree.
+    """A proof tree that can be printed in LaTeX.
+
+    === Public Attributes ===
+    label:
+        A label for the last step of this proof tree.
+    children:
+        The proof trees that start on the line above the base of this proof tree.
+
+    === Representation Invariants ===
+    - len(children) <= 2
     """
     label: str
     children: tuple['ProofTree', ...]
 
-    def __init__(self, label: str, children: Iterable['ProofTree']):
+    def __init__(self, label: str, children: Iterable['ProofTree']) -> None:
         self.label = label
         self.children = tuple(children)
 
-    def __str__(self):
+    def __str__(self) -> str:
+        r"""I use the following environment which allows for scaled proof trees,
+        as often proof trees are too big to fit on a page.
+        The argument of this environment gives the scaled factor (I often use values less than 1).
+\newenvironment{scprooftree}[1]
+  {\gdef\scalefactor{#1}\begin{center}\proofSkipAmount \leavevmode}
+  {\scalebox{\scalefactor}{\DisplayProof}\proofSkipAmount \end{center} }
+        """
         return r'\begin{scprooftree}{1}' + '\n' + self._inner_str(1) + '\n' + r'\end{scprooftree}'
 
     @abstractmethod
-    def __hash__(self):
+    def __hash__(self) -> int:
         pass
 
     @abstractmethod
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         pass
 
     def _inner_str(self, indent: int) -> str:
+        """A LaTeX printout of the proof tree at the given indent.
+
+        :param indent: How many indents should precede each line.
+        :return: A LaTeX printout of the proof tree at the given indent.
+        """
         if not len(self.children) and not self.label:
             return '\t' * indent + r'\AxiomC{\(' + self._root_str() + r'\)}'
         inner_str: str = ''
@@ -328,12 +385,17 @@ class ProofTree(ABC):
 
     @abstractmethod
     def _root_str(self) -> str:
-        pass
+        """:return: A string representing the conclusion at the root of the tree."""
 
 
 class BetaEtaTree(ProofTree):
-    """
-    A beta-eta equality proof tree.
+    """A beta-eta equality proof tree.
+
+    === Public Attributes ===
+    l_term:
+        The term on the left side of the equality sign at the root.
+    r_term:
+        The term on the right side of the equality sign at the root.
     """
     l_term: LambdaTerm
     r_term: LambdaTerm
@@ -344,28 +406,29 @@ class BetaEtaTree(ProofTree):
         self.right_term = right_term
         super().__init__(label, children)
 
-    def __hash__(self):
-        return hash((self.left_term, self.right_term, self.label, self.children))
-
     def __eq__(self, other):
         return (isinstance(other, BetaEtaTree)
                 and (self.left_term, self.right_term, self.label, self.children)
                 == (other.left_term, other.right_term, other.label, other.children))
 
+    def __hash__(self):
+        return hash((self.left_term, self.right_term, self.label, self.children))
+
     def _root_str(self) -> str:
         return f'{self.left_term} = {self.right_term}'
 
+    @classmethod
+    def construct_beta_eta_tree(cls, left_term: LambdaTerm, right_term: LambdaTerm) -> 'BetaEtaTree':
+        """Construct a beta eta equality proof tree using user input.
 
-def construct_beta_eta_tree(left_term: LambdaTerm, right_term: LambdaTerm) -> BetaEtaTree:
-    """
-    Construct a beta eta equality proof tree using user input.
-
-    :return: The beta eta equality proof tree in LaTeX.
-    """
-    while True:
-        rule_number: str = ''
-        while rule_number not in ('1', '2', '3', '4', '5', '6', '7', '8'):
-            rule_number = input(f'''Which rule will you use to prove the following statement?
+        :param left_term: The term on the left of the equality.
+        :param right_term: The term on the right of the equality.
+        :return: The beta eta equality proof tree in LaTeX.
+        """
+        while True:
+            rule_number: str = ''
+            while rule_number not in ('1', '2', '3', '4', '5', '6', '7', '8'):
+                rule_number = input(f'''Which rule will you use to prove the following statement?
 {left_term} = {right_term}
 
 1: axiom
@@ -377,80 +440,93 @@ def construct_beta_eta_tree(left_term: LambdaTerm, right_term: LambdaTerm) -> Be
 7: beta
 8: eta
 ''')
-        if rule_number == '1':
-            return BetaEtaTree(left_term, right_term, '', tuple())
-        elif rule_number == '2':
-            if left_term != right_term:
-                print('The two terms are not equal.')
-                continue
-            return BetaEtaTree(left_term, right_term, 'refl', tuple())
-        elif rule_number == '3':
-            return BetaEtaTree(left_term, right_term, 'sym', (construct_beta_eta_tree(right_term, left_term),))
-        elif rule_number == '4':
-            middle_term = string_to_lambda_term(input('What is the middle term?\n'))
-            return BetaEtaTree(left_term, right_term, 'trans', (construct_beta_eta_tree(left_term, middle_term),
-                                                                construct_beta_eta_tree(middle_term, right_term)))
-        elif rule_number == '5':
-            if not left_term.is_application() or not right_term.is_application():
-                print('Both terms must be applications.')
-                continue
-            return BetaEtaTree(left_term, right_term, 'app',
-                               (construct_beta_eta_tree(left_term.left_subterm, right_term.left_subterm),
-                                construct_beta_eta_tree(left_term.right_subterm, right_term.right_subterm)))
-        elif rule_number == '6':
-            if not left_term.is_abstraction() or not right_term.is_abstraction():
-                print('Both terms must be abstractions.')
-                continue
-            return BetaEtaTree(left_term, right_term, 'abs',
-                               (construct_beta_eta_tree(left_term.left_subterm, right_term.left_subterm),))
-        elif rule_number == '7':
-            if not left_term.is_beta_redex():
-                print(f'{left_term} is not a beta redex.')
-                continue
-            if left_term.leftmost_reduction() != right_term:
-                print(f'The beta redex {left_term} does not reduce to {right_term}.')
-                continue
-            return BetaEtaTree(left_term, right_term, r'\(\beta\)', tuple())
-        else:
-            if not left_term.is_eta_redex():
-                print(f'{left_term} is not an eta redex.')
-                continue
-            if left_term.leftmost_beta_eta_reduction() != right_term:
-                print(f'The eta redex {left_term} does not reduce to {right_term}.')
-                continue
-            return BetaEtaTree(left_term, right_term, r'\(\eta\)', tuple())
+            if rule_number == '1':
+                return cls(left_term, right_term, '', tuple())
+            elif rule_number == '2':
+                if left_term != right_term:
+                    print('The two terms are not equal.')
+                    continue
+                return cls(left_term, right_term, 'refl', tuple())
+            elif rule_number == '3':
+                return cls(left_term, right_term, 'sym', (cls.construct_beta_eta_tree(right_term, left_term),))
+            elif rule_number == '4':
+                middle_term = LambdaTerm.string_to_lambda_term(input('What is the middle term?\n'))
+                return cls(left_term, right_term, 'trans', (cls.construct_beta_eta_tree(left_term, middle_term),
+                                                            cls.construct_beta_eta_tree(middle_term, right_term)))
+            elif rule_number == '5':
+                if not left_term.is_application() or not right_term.is_application():
+                    print('Both terms must be applications.')
+                    continue
+                return cls(left_term, right_term, 'app',
+                           (cls.construct_beta_eta_tree(left_term.left_subterm, right_term.left_subterm),
+                            cls.construct_beta_eta_tree(left_term.right_subterm, right_term.right_subterm)))
+            elif rule_number == '6':
+                if not left_term.is_abstraction() or not right_term.is_abstraction():
+                    print('Both terms must be abstractions.')
+                    continue
+                return cls(left_term, right_term, 'abs', (cls.construct_beta_eta_tree(left_term.left_subterm,
+                                                                                      right_term.left_subterm),))
+            elif rule_number == '7':
+                if not left_term.is_beta_redex():
+                    print(f'{left_term} is not a beta redex.')
+                    continue
+                if left_term.leftmost_beta_reduction() != right_term:
+                    print(f'The beta redex {left_term} does not reduce to {right_term}.')
+                    continue
+                return cls(left_term, right_term, r'\(\beta\)', tuple())
+            else:
+                if not left_term.is_eta_redex():
+                    print(f'{left_term} is not an eta redex.')
+                    continue
+                if left_term.leftmost_beta_eta_reduction() != right_term:
+                    print(f'The eta redex {left_term} does not reduce to {right_term}.')
+                    continue
+                return cls(left_term, right_term, r'\(\eta\)', tuple())
 
 
 class CombinatoryLogicTerm:
+    """A combinatory logic term.
+
+    === Public Attributes ===
+    variable:
+        If self is a variable, then this will be that variable as a string.
+        If self is the constant K, then this will be the string 'K'.
+        If self is the constant S, then this will be the string 'S'.
+        If self is an application, then this will be the empty string.
+    left_subterm:
+        If self is an application, then this will be as expected.
+        Otherwise, this will be None.
+    right_subterm:
+        If self is an application, then this will be as expected.
+        Otherwise, this will be None.
     """
-    A combinatory logic term.
-    """
-    variable: Optional[str]
+    variable: str
     left_subterm: Optional['CombinatoryLogicTerm']
     right_subterm: Optional['CombinatoryLogicTerm']
 
-    def __init__(self, variable: Optional[str] = None, left_subterm: Optional['CombinatoryLogicTerm'] = None,
-                 right_subterm: Optional['CombinatoryLogicTerm'] = None):
-        """
-        Init should be given the info for exactly one kind of term
+    def __init__(self, variable: str = '', left_subterm: Optional['CombinatoryLogicTerm'] = None,
+                 right_subterm: Optional['CombinatoryLogicTerm'] = None) -> None:
+        """Initialize the Combinatory Logic term.
 
-        :param variable: the variable if it is a variable, K if it's the constant K, and S if it's the constant S
-        :param left_subterm: the left subterm if it is an arrow type
-        :param right_subterm: the right subterm if it is an arrow type
+        :param variable: the variable if it is a variable (K and S are not allowed as variables),
+        K or S if it's the constant K or S respectively,
+        and the empty string if it's an application
+        :param left_subterm: the left subterm if it is an application
+        :param right_subterm: the right subterm if it is an application
 
-        >>> s = CombinatoryLogicTerm(variable='A')
+        >>> s = CombinatoryLogicTerm(variable='x')
         >>> print(s)
-        A
+        x
         """
-        assert (sum((variable is not None, left_subterm is not None))
-                * ((left_subterm is None) == (right_subterm is None)))
+        if (bool(variable) != (left_subterm is None)) or ((left_subterm is None) != (right_subterm is None)):
+            raise ValueError('The inputs do not correspond to a variable, constant, or application.')
 
         self.variable = variable
         self.left_subterm = left_subterm
         self.right_subterm = right_subterm
 
     def __str__(self):
-        if self.variable is not None:
+        if self.variable:
             return self.variable
         if self.right_subterm.is_application():
             return f'{self.left_subterm}({self.right_subterm})'
@@ -465,40 +541,29 @@ class CombinatoryLogicTerm:
                      == (other.variable, other.left_subterm, other.right_subterm)))
 
     def is_variable(self) -> bool:
-        """
-        :return: True iff it is a variable.
-        """
-        return self.variable is not None
+        """:return: True iff it is a variable."""
+        return bool(self.variable)
 
     def is_application(self) -> bool:
-        """
-        :return: True iff it is an application.
-        """
+        """:return: True iff it is an application."""
         return self.left_subterm is not None
 
     def is_k(self) -> bool:
-        """
-        :return: True iff it is the constant K.
-        """
+        """:return: True iff it is the constant K."""
         return self.variable == 'K'
 
     def is_s(self) -> bool:
-        """
-        :return: True iff it is the constant S.
-        """
+        """:return: True iff it is the constant S."""
         return self.variable == 'S'
 
-    def variables(self) -> frozenset:
-        """
-        :return: the type variables in the term
-        """
+    def variables(self) -> frozenset[str]:
+        """:return: the type variables in the term"""
         if self.is_variable():
             return frozenset(self.variable)
         return self.left_subterm.variables() | self.right_subterm.variables()
 
-    def combinatory_logic_lambda(self, variable: str) -> 'CombinatoryLogicTerm':
-        """
-        Perform lambda abstraction on a combinatory logic term.
+    def abstraction(self, variable: str) -> 'CombinatoryLogicTerm':
+        """Perform lambda abstraction on a combinatory logic term.
 
         :param variable: The variable being abstracted
         :return: The combinatory logic term resulting from abstracting variable from this term
@@ -513,73 +578,73 @@ class CombinatoryLogicTerm:
         return CombinatoryLogicTerm(
             left_subterm=CombinatoryLogicTerm(
                 left_subterm=CombinatoryLogicTerm(variable='S'),
-                right_subterm=self.left_subterm.combinatory_logic_lambda(variable)),
-            right_subterm=self.right_subterm.combinatory_logic_lambda(variable))
+                right_subterm=self.left_subterm.abstraction(variable)),
+            right_subterm=self.right_subterm.abstraction(variable))
 
+    @classmethod
+    def string_to_combinatory_logic_term(cls, term_string: str) -> 'CombinatoryLogicTerm':
+        """Given a string representing a combinatory logic term, return the represented term.
 
-def string_to_combinatory_logic_term(term_string: str) -> CombinatoryLogicTerm:
-    """
+        :param term_string: A string representing a combinatory logic term with single character variables.
+        :return: The represented term.
+        """
+        if term_string[0] == '(':
+            term_string = term_string[1:-1]
+        if len(term_string) == 1:
+            return cls(variable=term_string)
 
-    :param term_string: A combinatory logic term with single character variables and no extra parentheses
-    (other than optionally outer parentheses).
-    :return: The combinatory logic term represented by term.
-    """
-    if term_string[0] == '(':
-        term_string = term_string[1:-1]
-    if len(term_string) == 1:
-        return CombinatoryLogicTerm(variable=term_string)
-
-    start_of_second_subterm: int = -1
-    open_parentheses: int = 1 if term_string.endswith(')') else 0
-    while open_parentheses:
-        start_of_second_subterm -= 1
-        if term_string[start_of_second_subterm] == '(':
-            open_parentheses -= 1
-        elif term_string[start_of_second_subterm] == ')':
-            open_parentheses += 1
-    return CombinatoryLogicTerm(left_subterm=string_to_combinatory_logic_term(term_string[:start_of_second_subterm]),
-                                right_subterm=string_to_combinatory_logic_term(term_string[start_of_second_subterm:]))
+        start_of_second_subterm: int = -1
+        open_parentheses: int = 1 if term_string.endswith(')') else 0
+        while open_parentheses:
+            start_of_second_subterm -= 1
+            if term_string[start_of_second_subterm] == '(':
+                open_parentheses -= 1
+            elif term_string[start_of_second_subterm] == ')':
+                open_parentheses += 1
+        return cls(
+            left_subterm=cls.string_to_combinatory_logic_term(term_string[:start_of_second_subterm]),
+            right_subterm=cls.string_to_combinatory_logic_term(term_string[start_of_second_subterm:]))
 
 
 class SimpleType:
+    """A type in the simple type system.
+
+    === Public Attributes ===
+    variable:
+        If self is a variable, then this will be that variable as a string.
+        Otherwise, this will be the empty string.
+    left_subtype:
+        If self is an arrow type, then this will be as expected.
+        Otherwise, this will be None.
+    right_subtype:
+        If self is an arrow type, then this will be as expected.
+        Otherwise, this will be None.
     """
-    A type in the simple type system.
-    """
-    variable: Optional[str]
+    variable: str
     left_subtype: Optional['SimpleType']
     right_subtype: Optional['SimpleType']
 
-    def __init__(self, variable: Optional[str] = None, left: Optional['SimpleType'] = None,
-                 right: Optional['SimpleType'] = None):
-        """
-        Init should be given a variable string XOR a left and right subtype.
+    def __init__(self, variable: str = '',
+                 left_subtype: Optional['SimpleType'] = None, right_subtype: Optional['SimpleType'] = None) -> None:
+        """Initialize the simple type.
 
-        :param variable: the variable if it is a variable
-        :param left: the left subtype if it is an arrow type
-        :param right: the right subtype if it is an arrow type
+        :param variable: the variable if it is a variable and the empty string otherwise
+        :param left_subtype: the left subterm if it is an arrow type
+        :param right_subtype: the right subterm if it is an arrow type
 
-        >>> s = SimpleType(variable='A')
+        >>> s = SimpleType(variable='a')
         >>> print(s)
-        A
+        a
         """
-        assert (variable is not None or (left is not None and right is not None)
-                and (variable is None or (left is None and right is None)))
-        if variable is not None:
-            self.variable = variable
-            self.left_subtype = None
-            self.right_subtype = None
-        elif left is not None and right is not None:
-            self.variable = None
-            self.left_subtype = left
-            self.right_subtype = right
-        else:
-            print('Fuck you')
-            self.variable = 'A'
-            self.left_subtype = None
-            self.right_subtype = None
+        if (bool(variable) != (left_subtype is None)) or ((left_subtype is None) != (right_subtype is None)):
+            raise ValueError('The inputs do not correspond to a variable or arrow type.')
+
+        self.variable = variable
+        self.left_subtype = left_subtype
+        self.right_subtype = right_subtype
 
     def __str__(self):
-        if self.variable is not None:
+        if self.variable:
             return self.variable
         if self.left_subtype.is_variable():
             return fr'{self.left_subtype}>{self.right_subtype}'
@@ -593,14 +658,11 @@ class SimpleType:
             other.variable, other.left_subtype, other.right_subtype)
 
     def is_variable(self) -> bool:
-        """
-        :return: True iff it is a variable.
-        """
-        return self.variable is not None
+        """:return: True iff it is a variable."""
+        return bool(self.variable)
 
     def variables(self) -> frozenset[str]:
-        """
-        :return: the type variables in the type
+        """:return: the type variables in the type
 
         >>> a = SimpleType(variable='a_1')
         >>> a.variables()
@@ -610,83 +672,98 @@ class SimpleType:
             return frozenset({self.variable})
         return self.left_subtype.variables() | self.right_subtype.variables()
 
+    @classmethod
+    def string_to_type(cls, type_string: str) -> 'SimpleType':
+        """Given a string representing a simple type, return the represented type.
 
-def string_to_type(type_string: str) -> SimpleType:
-    """
+        :param type_string: A string representing the type where the only characters are part of variables,
+        > meaning an arrow, or parentheses.
+        :return: The SimpleType represented by type_string.
 
-    :param type_string: A string representing the type where the only characters are part of variables,
-    > meaning an arrow, or parentheses, with no extra parentheses (other than optionally outer parentheses).
-    :return: The SimpleType represented by type_string.
+        >>> s = SimpleType.string_to_type('a')
+        >>> print(s)
+        a
+        >>> s = SimpleType.string_to_type('(a>a>b)>a>b')
+        >>> print(s)
+        (a>a>b)>a>b
+        >>> s = SimpleType.string_to_type('((a>(a>b))>(a>b))')
+        >>> print(s)
+        (a>a>b)>a>b
+        """
+        if '>' not in type_string:
+            return cls(variable=type_string)
 
-    >>> s = string_to_type('(A>A>B)>A>B')
-    >>> print(s)
-    (A>A>B)>A>B
-    """
-    if type_string.endswith(')'):
-        type_string = type_string[1:-1]
+        topmost_arrow_index: int
+        if type_string.startswith('('):
+            topmost_arrow_index = 1
+            open_parentheses: int = 1
+            while open_parentheses:
+                if type_string[topmost_arrow_index] == '(':
+                    open_parentheses += 1
+                elif type_string[topmost_arrow_index] == ')':
+                    open_parentheses -= 1
+                topmost_arrow_index += 1
+            if topmost_arrow_index == len(type_string):
+                return cls.string_to_type(type_string[1:-1])
+        else:
+            topmost_arrow_index = type_string.index('>')
 
-    if '>' not in type_string:
-        return SimpleType(variable=type_string)
-
-    start_of_second_subtype: int = 1
-    open_parentheses: int = 1 if type_string[0] == '(' else 0
-    while open_parentheses:
-        if type_string[start_of_second_subtype] == '(':
-            open_parentheses += 1
-        elif type_string[start_of_second_subtype] == ')':
-            open_parentheses -= 1
-        start_of_second_subtype += 1
-    return SimpleType(left=string_to_type(type_string[:start_of_second_subtype]),
-                      right=string_to_type(type_string[start_of_second_subtype + 1:]))
+        return cls(left_subtype=cls.string_to_type(type_string[:topmost_arrow_index]),
+                   right_subtype=cls.string_to_type(type_string[topmost_arrow_index + 1:]))
 
 
 class TypeContext:
-    r"""
-    At least one of indices and extra_assignment should be None.
+    r"""A type context.
 
-    Consistency is not checked.
+    === Public Attributes ===
+    type_assignments:
+        A frozendict which maps variables as strings to simple types as SimpleTypes.
 
     >>> t = TypeContext({})
     >>> print(t)
     <BLANKLINE>
-    >>> t = TypeContext({'x': SimpleType(variable='A')})
+    >>> t = TypeContext({'x': SimpleType(variable='a')})
     >>> print(t)
-    \set{x:A}
+    \set{x:a}
     """
     type_assignments: frozendict[str, SimpleType]
 
-    def __init__(self, type_assignments: Union[frozendict[str, SimpleType], dict[str, SimpleType]]):
-        if isinstance(type_assignments, frozendict):
-            self.type_assignments = type_assignments
-        else:
-            self.type_assignments = frozendict(type_assignments)
+    def __init__(self, type_assignments: Mapping[str, SimpleType]) -> None:
+        self.type_assignments = frozendict(type_assignments)
 
-    def __hash__(self):
-        return hash(self.type_assignments)
-
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         return isinstance(other, TypeContext) and self.type_assignments == other.type_assignments
 
-    def __str__(self):
+    def __hash__(self) -> int:
+        return hash(self.type_assignments)
+
+    def __str__(self) -> str:
+        """:return: The type context in LaTeX as it would be displayed in a deduction relation.
+
+        >>> print(TypeContext({'y': SimpleType(variable='b'), 'x': SimpleType(variable='a')}))
+        \set{x:a, y:b}
+        """
         if not self.type_assignments:
             return ''
-        subjects = list(self.type_assignments.keys())
-        subjects.sort()
-        string_repesentation: str = r'\set{'
-        for subject in subjects[:-1]:
-            string_repesentation += f'{subject}:{self.type_assignments[subject]}, '
-        return string_repesentation + f'{subjects[-1]}:{self.type_assignments[subjects[-1]]}' + r'}'
+        return (r'\set{'
+                + ', '.join(f'{subject}:{assignment}' for subject, assignment in sorted(self.type_assignments.items()))
+                + '}')
 
-    def __getitem__(self, item):
+    def __getitem__(self, item) -> SimpleType:
         return self.type_assignments[item]
 
-    def __or__(self, other):
-        if isinstance(other, TypeContext):
-            return TypeContext(self.type_assignments | other.type_assignments)
-        raise TypeError('A TypeContext can only be unioned with the same type.')
+    def __or__(self, other) -> 'TypeContext':
+        if not isinstance(other, TypeContext):
+            raise TypeError('A TypeContext can only be unioned with the same type.')
+        for variable in self.type_assignments:
+            if (variable in other.type_assignments
+                    and self.type_assignments[variable] != other.type_assignments[variable]):
+                raise ValueError('These TypeContexts are not consistent.')
+        return TypeContext(self.type_assignments | other.type_assignments)
 
     def restriction(self, subjects: Iterable[str]) -> 'TypeContext':
-        """
+        """Return the restriction of self to subjects.
+
         :param subjects: the variables to restrict this type context to
         :return: this type context restricted to the given variables
         """
@@ -694,7 +771,8 @@ class TypeContext:
             {subject: self.type_assignments[subject] for subject in subjects if subject in self.type_assignments})
 
     def set(self, variable: str, simple_type: SimpleType) -> 'TypeContext':
-        """
+        """Return the result of adding {variable: simple_type} to self.
+
         :param variable: variable to add to the context
         :param simple_type: type to assign variable
         :return: the new context
@@ -702,61 +780,170 @@ class TypeContext:
         return TypeContext(self.type_assignments.set(variable, simple_type))
 
     def remove(self, variable: str) -> tuple['TypeContext', SimpleType]:
-        """
+        """Return the result of removing variable from self and the type variable was assigned.
+        raises KeyError if variable is not in self.
+
         :param variable: variable to remove from the context
-        :return: the type of the variable and the new context
+        :return: the new context and the type of the variable
         """
         return TypeContext(self.type_assignments.delete(variable)), self.type_assignments[variable]
 
 
-class Deduction(ProofTree):
-    """
-    A typing deduction.
+class DeductionTree(ProofTree):
+    """A deduction tree.
+
+    === Public Attributes ===
+    type_context:
+        The type context at the root.
+    lambda_term:
+        The lambda term at the root.
+    simple_type:
+        The deduced type for the lambda term at the root.
     """
     type_context: TypeContext
     lambda_term: LambdaTerm
     simple_type: SimpleType
-    children: tuple['Deduction', ...]
+    children: tuple['DeductionTree', ...]
 
     def __init__(self, type_context: TypeContext, lambda_term: LambdaTerm, simple_type: SimpleType, label: str,
-                 children: Iterable['Deduction']):
+                 children: Iterable['DeductionTree']):
         self.type_context = type_context
         self.lambda_term = lambda_term
         self.simple_type = simple_type
         super().__init__(label, children)
 
-    def __hash__(self):
-        return hash((self.type_context, self.lambda_term, self.simple_type, self.children))
-
     def __eq__(self, other):
-        return (isinstance(other, Deduction)
-                and (self.type_context, self.lambda_term, self.simple_type, self.children)
-                == (other.type_context, other.lambda_term, other.simple_type, other.children))
+        return (isinstance(other, DeductionTree)
+                and (self.type_context, self.lambda_term, self.simple_type, self.label, self.children)
+                == (other.type_context, other.lambda_term, other.simple_type, self.label, other.children))
+
+    def __hash__(self):
+        return hash((self.type_context, self.lambda_term, self.simple_type, self.label, self.children))
 
     def _root_str(self) -> str:
         return fr'{self.type_context} \mapsto {self.lambda_term} : {self.simple_type}'.replace('>', r' \Rightarrow ')
 
     def type_variables(self) -> frozenset[str]:
-        """
-        :return: The type variables occuring in this deduction.
-        """
+        """:return: The type variables occuring in this deduction."""
         type_vars: frozenset[str] = self.simple_type.variables()
+        for simple_type in self.type_context.type_assignments.values():
+            type_vars |= simple_type.variables()
         for child in self.children:
             type_vars |= child.type_variables()
         return type_vars
 
+    @classmethod
+    def principal_type_algorithm(cls, lambda_term: LambdaTerm,
+                                 disallowed_type_variables: frozenset[str] = frozenset()) -> Optional['DeductionTree']:
+        """
+        :param lambda_term:
+        :param disallowed_type_variables:
+        :return: A principal deduction without any disallowed type variables for lambda_term if it exists
+
+        >>> print(DeductionTree.principal_type_algorithm(LambdaTerm(left_subterm=LambdaTerm(variable='x'),
+        ...                                           right_subterm=LambdaTerm(variable='x'))))
+        None
+        """
+        if lambda_term.is_variable():
+            next_index: int = 1
+            while 'a_{' + str(next_index) + '}' in disallowed_type_variables:
+                next_index += 1
+            type_variable: SimpleType = SimpleType(variable='a_{' + str(next_index) + '}')
+            return cls(TypeContext({lambda_term.variable: type_variable}), lambda_term, type_variable, 'var',
+                                 [])
+
+        if lambda_term.is_abstraction():
+            sub_deduction: cls = cls.principal_type_algorithm(lambda_term.left_subterm, disallowed_type_variables)
+            if sub_deduction is None:
+                return None
+            if lambda_term.variable in lambda_term.left_subterm.free_variables():
+                type_context, abstracted_type = sub_deduction.type_context.remove(lambda_term.variable)
+                # return Deduction(type_context, lambda_term,
+                #                  SimpleType(left_subtype=abstracted_type, right_subtype=sub_deduction.simple_type),
+                #                  'abstraction-main', [sub_deduction])
+                return cls(type_context, lambda_term,
+                                     SimpleType(left_subtype=abstracted_type, right_subtype=sub_deduction.simple_type),
+                                     'abs-main', [sub_deduction])
+            next_index: int = 1
+            used_type_variables = sub_deduction.type_variables() | disallowed_type_variables
+            while 'a_{' + str(next_index) + '}' in used_type_variables:
+                next_index += 1
+            # return Deduction(sub_deduction.type_context, lambda_term,
+            #                  SimpleType(left_subtype=SimpleType(variable=f'a_{next_index}'),
+            #                             right_subtype=sub_deduction.simple_type),
+            #                  'abstraction-vac', [sub_deduction])
+            return cls(sub_deduction.type_context, lambda_term,
+                                 SimpleType(left_subtype=SimpleType(variable='a_{' + str(next_index) + '}'),
+                                            right_subtype=sub_deduction.simple_type),
+                                 'abs-vac', [sub_deduction])
+
+        left_sub_deduction: cls = cls.principal_type_algorithm(lambda_term.left_subterm,
+                                                                     disallowed_type_variables)
+        if left_sub_deduction is None:
+            return None
+        right_sub_deduction: cls = cls.principal_type_algorithm(lambda_term.right_subterm,
+                                                                      (left_sub_deduction.type_variables()
+                                                                       | disallowed_type_variables))
+        if right_sub_deduction is None:
+            return None
+
+        common_free_variables: list[str] = list(lambda_term.left_subterm.free_variables()
+                                                & lambda_term.right_subterm.free_variables())
+        left_types: list[SimpleType] = [left_sub_deduction.type_context[var] for var in common_free_variables]
+        right_types: list[SimpleType] = [right_sub_deduction.type_context[var] for var in common_free_variables]
+
+        if left_sub_deduction.simple_type.is_variable():
+            left_types.append(left_sub_deduction.simple_type)
+            used_type_variables = (left_sub_deduction.type_variables()
+                                   | right_sub_deduction.type_variables()
+                                   | disallowed_type_variables)
+            next_index: int = 1
+            while 'a_{' + str(next_index) + '}' in used_type_variables:
+                next_index += 1
+            right_types.append(SimpleType(left_subtype=right_sub_deduction.simple_type,
+                                          right_subtype=SimpleType(variable='a_{' + str(next_index) + '}')))
+        else:
+            left_types.append(left_sub_deduction.simple_type.left_subtype)
+            right_types.append(right_sub_deduction.simple_type)
+
+        mgu_domain: frozenset[str] = frozenset()
+        for simple_type in left_types:
+            mgu_domain |= simple_type.variables()
+        for simple_type in right_types:
+            mgu_domain |= simple_type.variables()
+
+        unifier: Optional[TypeSubstitution] = TypeSubstitution.sequence_most_general_unifier(left_types, right_types,
+                                                                                             ((
+                                                                                                          left_sub_deduction.type_variables()
+                                                                                                          | right_sub_deduction.type_variables())
+                                                                                              - mgu_domain))
+        if unifier is None:
+            return None
+
+        left_sub_deduction = unifier * left_sub_deduction
+        right_sub_deduction = unifier * right_sub_deduction
+
+        return cls(left_sub_deduction.type_context | right_sub_deduction.type_context,
+                             LambdaTerm(left_subterm=lambda_term.left_subterm, right_subterm=lambda_term.right_subterm),
+                             left_sub_deduction.simple_type.right_subtype, 'app',
+                             [left_sub_deduction, right_sub_deduction])
+
 
 class TypeSubstitution:
-    """
-    A type substitution.
+    """A generalized type substitution, where we can substitute out any type, not just variables.
+    Larger (by containment) types take priority for being substituted out.
+
+    === Public Attributes ===
+    type_substitution:
+        The type context at the root.
     """
     type_substitution: frozendict[SimpleType, SimpleType]
 
-    def __init__(self, type_substitution: Union[dict[Union[str, SimpleType], SimpleType],
-                                                frozendict[Union[str, SimpleType], SimpleType]]):
-        """
+    def __init__(self, type_substitution: Mapping[Union[str, SimpleType], SimpleType]):
+        """Initialize this TypeSubstitution.
 
-        :param type_substitution: Must be consistent
+        :param type_substitution: A Mapping from strings and SimpleTypes to SimpleTypes.
+        If a string is given as a key, it is assumed to represent the corresponding variable type.
         """
         self.type_substitution = frozendict({SimpleType(var): value for var, value in type_substitution.items()
                                              if isinstance(var, str)}
@@ -764,14 +951,15 @@ class TypeSubstitution:
                                                if isinstance(simple_type, SimpleType)})
 
     def __mul__(self, other):
-        """
+        """Apply this substitution to another object.
+        Defined for SimpleType, TypeContext, DeductionTree, and TypeSubstitution.
 
-        :param other:
-        :return:
+        :param other: The object to apply this substitution to.
+        :return: The result of applying self to other.
 
-        >>> U = TypeSubstitution({'a': string_to_type('b>d')})
-        >>> A = string_to_type('a>c>c')
-        >>> B = string_to_type('(b>d)>a')
+        >>> U = TypeSubstitution({'a': SimpleType.string_to_type('b>d')})
+        >>> A = SimpleType.string_to_type('a>c>c')
+        >>> B = SimpleType.string_to_type('(b>d)>a')
         >>> print(U * A)
         (b>d)>c>c
         >>> print(U * B)
@@ -782,36 +970,151 @@ class TypeSubstitution:
                 return self.type_substitution[other]
             if other.is_variable():
                 return other
-            return SimpleType(left=self * other.left_subtype, right=self * other.right_subtype)
+            return SimpleType(left_subtype=self * other.left_subtype, right_subtype=self * other.right_subtype)
 
         if isinstance(other, TypeContext):
             return TypeContext({var: self * simple_type for var, simple_type in other.type_assignments.items()})
 
-        if isinstance(other, Deduction):
-            return Deduction(self * other.type_context, other.lambda_term, self * other.simple_type, other.label,
-                             (self * child for child in other.children))
+        if isinstance(other, DeductionTree):
+            return DeductionTree(self * other.type_context, other.lambda_term, self * other.simple_type, other.label,
+                                 (self * child for child in other.children))
 
         if isinstance(other, TypeSubstitution):
             return TypeSubstitution(
-                {type_var: self * simple_value for type_var, simple_value in other.type_substitution.items()}
-                | self.type_substitution)
+                self.type_substitution
+                | {type_var: self * simple_value for type_var, simple_value in other.type_substitution.items()})
 
         raise TypeError(f'Multiplication is not defined between TypeSubstitution and {type(other)}')
 
+    def restrict(self, variables: frozenset[SimpleType]) -> 'TypeSubstitution':
+        """Return self but with the domain restricted to variables.
 
-def get_term_type_assignment_from_context_or_user(type_context: TypeContext, lambda_term: LambdaTerm) -> SimpleType:
-    """
+        :param variables: A superset of the new domain.
+        :return: self but with the domain restricted to variables.
+        """
+        return TypeSubstitution({k: v for k, v in self.type_substitution.items() if k in variables})
+
+    @classmethod
+    def most_general_unifier(cls, type_1: SimpleType, type_2: SimpleType) -> Optional['TypeSubstitution']:
+        """Return a most general unifier for type_1 and type_2 if one exists,
+        with domain and range restricted to the variables occuring in type_1 or type_2.
+        If no most general unifier exists, return None.
+
+        :param type_1:
+        :param type_2:
+        :return: A most general unifier for type_1 and type_2 if one exists,
+        with domain and range restricted to the variables occuring in type_1 or type_2.
+        If no most general unifier exists, return None.
+
+        >>> A = SimpleType.string_to_type('a>c>c')
+        >>> B = SimpleType.string_to_type('(b>d)>a')
+        >>> U = TypeSubstitution.most_general_unifier(A, B)
+        >>> U * A == U * B
+        True
+        >>> print(U * A)
+        (d>d)>d>d
+        >>> A = SimpleType.string_to_type('a>a>a')
+        >>> B = SimpleType.string_to_type('b>b')
+        >>> U = TypeSubstitution.most_general_unifier(A, B)
+        >>> U is None
+        True
+        """
+        if type_1 == type_2:
+            return cls({})
+
+        if type_1.is_variable():
+            if type_1.variable in type_2.variables():
+                return None
+            return cls({type_1.variable: type_2})
+
+        if type_2.is_variable():
+            if type_2.variable in type_1.variables():
+                return None
+            return cls({type_2.variable: type_1})
+
+        left_unifier: cls = cls.most_general_unifier(type_1.left_subtype, type_2.left_subtype)
+        if left_unifier is None:
+            return None
+        right_unifier: cls = cls.most_general_unifier(left_unifier * type_1.right_subtype,
+                                                      left_unifier * type_2.right_subtype)
+        if right_unifier is None:
+            return None
+        return right_unifier * left_unifier
+
+    @classmethod
+    def fresh_most_general_unifier(cls, type_1: SimpleType, type_2: SimpleType,
+                                   disallowed_type_variables: frozenset[str]) -> Optional['TypeSubstitution']:
+        """Return a most general unifier for type_1 and type_2 if one exists,
+        with domain restricted to the variables occuring in type_1 or type_2,
+        where the most general unification does not contain the disallowed types.
+        If no most general unifier exists, return None.
+
+        :param type_1:
+        :param type_2:
+        :param disallowed_type_variables: The types that cannot appear in the most general unification.
+        :return: A most general unifier for type_1 and type_2 if one exists,
+        with domain restricted to the variables occuring in type_1 or type_2,
+        where the most general unification does not contain the disallowed types.
+        If no most general unifier exists, return None.
+        """
+        mgu: cls = cls.most_general_unifier(type_1, type_2)
+        if mgu is None:
+            return None
+
+        current_variables: frozenset[str] = (mgu * type_1).variables()
+        problem_variables: frozenset[str] = (mgu * type_1).variables() & disallowed_type_variables
+        used_variables: set[str] = set(current_variables | disallowed_type_variables)
+        next_index: int = 1
+        for type_variable in problem_variables:
+            while f'a_{next_index}' in used_variables:
+                next_index += 1
+            new_variable: str = 'a_{' + str(next_index) + '}'
+            mgu = cls({type_variable: SimpleType(variable=new_variable)}) * mgu
+            used_variables.add(new_variable)
+
+        return mgu
+
+    @classmethod
+    def sequence_most_general_unifier(cls, type_sequence_1: list[SimpleType], type_sequence_2: list[SimpleType],
+                                      disallowed_type_variables: frozenset[str] = frozenset()
+                                      ) -> Optional['TypeSubstitution']:
+        """Return a most general unifier for the sequences type_sequence_1 and type_sequence_2 if one exists,
+        with domain restricted to the variables occuring in type_sequence_1 or type_sequence_2,
+        where the most general unification does not contain the disallowed types.
+        If the sequences are of different length or no most general unifier exists, return None.
+
+        :param type_sequence_1: A sequence of types.
+        :param type_sequence_2: A sequence of types.
+        :param disallowed_type_variables: The types that cannot appear in the most general unification.
+        :return: A most general unifier for the sequences type_sequence_1 and type_sequence_2 if one exists,
+        with domain restricted to the variables occuring in type_sequence_1 or type_sequence_2,
+        where the most general unification does not contain the disallowed types.
+        If the sequences are of different length or no most general unifier exists, return None.
+        """
+        if len(type_sequence_1) != len(type_sequence_2):
+            return None
+
+        concat_type_1 = type_sequence_1[0]
+        concat_type_2 = type_sequence_2[0]
+        for simple_type in type_sequence_1[1:]:
+            concat_type_1 = SimpleType(left_subtype=concat_type_1, right_subtype=simple_type)
+        for simple_type in type_sequence_2[1:]:
+            concat_type_2 = SimpleType(left_subtype=concat_type_2, right_subtype=simple_type)
+
+        return cls.fresh_most_general_unifier(concat_type_1, concat_type_2, disallowed_type_variables)
+
+
+def get_term_type_assignment_from_context_or_user(lambda_term: LambdaTerm, type_context: TypeContext) -> SimpleType:
+    """Given a lambda term and a type context, deduce the type of the lambda term,
+    potentially using input from the user to do so.
 
     :param type_context:
-    :type type_context:
     :param lambda_term:
-    :type lambda_term:
-    :return:
-    :rtype:
+    :return: The type of lambda_term.
     """
     if lambda_term.is_variable() and lambda_term.variable in type_context.type_assignments:
         return type_context.type_assignments[lambda_term.variable]
-    return string_to_type(input(f'What is the type of {lambda_term}?\n'))
+    return SimpleType.string_to_type(input(f'What is the type of {lambda_term}?\n'))
 
 
 def construct_typing_proof_tree() -> str:
@@ -826,13 +1129,14 @@ def construct_typing_proof_tree() -> str:
 
     variable: str = input('Enter the first variable in the type context or the empty string if the context is empty.\n')
     while variable:
-        type_context_dict[variable] = string_to_type(
-            input('Enter the type of the variable in the format (A>B)>(C>A)>D\n'))
+        type_context_dict[variable] = SimpleType.string_to_type(
+            input('Enter the type of the variable in the format (a>b)>(c>a)>d\n'))
         variable = input('Enter the next variable in the type context or the empty string if the context is empty.\n')
 
     starting_type_context: TypeContext = TypeContext(type_context_dict)
-    starting_term: LambdaTerm = string_to_lambda_term(input('Please enter the lambda term you wish to type.\n'))
-    starting_type: SimpleType = string_to_type(input('Please enter the type.\n'))
+    starting_term: LambdaTerm = LambdaTerm.string_to_lambda_term(
+        input('Please enter the lambda term you wish to type.\n'))
+    starting_type: SimpleType = SimpleType.string_to_type(input('Please enter the type.\n'))
 
     proof_tree: dict[tuple[TypeContext, LambdaTerm, SimpleType], tuple[
         str, int, list[tuple[TypeContext, LambdaTerm, SimpleType]]]] = {}
@@ -846,16 +1150,16 @@ def construct_typing_proof_tree() -> str:
         if lambda_term.is_variable():
             proof_tree[(type_context, lambda_term, simple_type)] = ('variable', depth, [])
         elif lambda_term.is_application():
-            right_subterm_type: SimpleType = get_term_type_assignment_from_context_or_user(type_context,
-                                                                                           lambda_term.right_subterm)
+            right_subterm_type: SimpleType = get_term_type_assignment_from_context_or_user(lambda_term.right_subterm,
+                                                                                           type_context)
 
             left_subterm_context: TypeContext = type_context.restriction(lambda_term.left_subterm.free_variables())
 
             right_subterm_context: TypeContext = type_context.restriction(lambda_term.right_subterm.free_variables())
 
             left_child: tuple[TypeContext, LambdaTerm, SimpleType] = (left_subterm_context, lambda_term.left_subterm,
-                                                                      SimpleType(left=right_subterm_type,
-                                                                                 right=simple_type))
+                                                                      SimpleType(left_subtype=right_subterm_type,
+                                                                                 right_subtype=simple_type))
 
             right_child: tuple[TypeContext, LambdaTerm, SimpleType] = (
                 right_subterm_context, lambda_term.right_subterm, right_subterm_type)
@@ -908,213 +1212,15 @@ def construct_typing_proof_tree() -> str:
     return proof_string
 
 
-def most_general_unifier(type_1: SimpleType, type_2: SimpleType) -> Optional[TypeSubstitution]:
-    """
-
-    :param type_1:
-    :param type_2:
-    :return: The most general unifier for a and b.
-
-    >>> A = SimpleType(left=SimpleType(variable='a'),
-    ...                right=SimpleType(left=SimpleType(variable='c'),
-    ...                                         right=SimpleType(variable='c')))
-    >>> B = SimpleType(left=SimpleType(left=SimpleType(variable='b'),
-    ...                                        right=SimpleType(variable='d')),
-    ...                right=SimpleType(variable='a'))
-    >>> U = most_general_unifier(A, B)
-    >>> U * A == U * B
-    True
-    >>> print(U * A)
-    (d>d)>d>d
-    """
-    if type_1 == type_2:
-        return TypeSubstitution({})
-
-    if type_1.is_variable():
-        if type_1.variable in type_2.variables():
-            return None
-        return TypeSubstitution({type_1.variable: type_2})
-
-    if type_2.is_variable():
-        if type_2.variable in type_1.variables():
-            return None
-        return TypeSubstitution({type_2.variable: type_1})
-
-    left_unifier: TypeSubstitution = most_general_unifier(type_1.left_subtype, type_2.left_subtype)
-    if left_unifier is None:
-        return None
-    right_unifier: TypeSubstitution = most_general_unifier(left_unifier * type_1.right_subtype,
-                                                           left_unifier * type_2.right_subtype)
-    if right_unifier is None:
-        return None
-    return right_unifier * left_unifier
-
-
-def fresh_most_general_unifier(type_1: SimpleType, type_2: SimpleType,
-                               disallowed_type_variables: frozenset[str]) -> Optional[TypeSubstitution]:
-    """
-
-    :param type_1:
-    :param type_2:
-    :param disallowed_type_variables:
-    :return: an mgu for type 1 and 2 where the images don't intersect the disallowed types
-    """
-    mgu: TypeSubstitution = most_general_unifier(type_1, type_2)
-    if mgu is None:
-        return None
-    current_variables: frozenset[str] = (mgu * type_1).variables() | (mgu * type_2).variables()
-    current_problem_variables: frozenset[str] = current_variables & disallowed_type_variables
-    next_index: int = 1
-    while current_problem_variables:
-        for a in current_problem_variables:
-            used_variables: frozenset[str] = current_variables | disallowed_type_variables
-            while f'a_{next_index}' in used_variables:
-                next_index += 1
-            mgu = TypeSubstitution({a: SimpleType(variable='a_{' + str(next_index) + '}')}) * mgu
-            current_variables = (mgu * type_1).variables() | (mgu * type_2).variables()
-        current_problem_variables = current_variables & disallowed_type_variables
-
-    return mgu
-
-
-def sequence_most_general_unifier(type_sequence_1: list[SimpleType], type_sequence_2: list[SimpleType],
-                                  disallowed_type_variables: frozenset[str] = frozenset()
-                                  ) -> Optional[TypeSubstitution]:
-    """
-
-    :param type_sequence_1: A sequence of types.
-    :param type_sequence_2: A sequence of types.
-    :param disallowed_type_variables: Variables that cannot be in the image of the mgu applied to the inputs.
-    :return: A most general unifier for the two inputs.
-    """
-    if len(type_sequence_1) != len(type_sequence_2):
-        return None
-
-    used_type_variables: set = set()
-    for simple_type in type_sequence_1:
-        used_type_variables |= simple_type.variables()
-    for simple_type in type_sequence_2:
-        used_type_variables |= simple_type.variables()
-    next_index: int = -1
-    while 'a_{' + str(next_index) + '}' in used_type_variables:
-        next_index += 1
-
-    concat_type_1 = SimpleType(variable='a_{' + str(next_index) + '}')
-    concat_type_2 = concat_type_1
-    for simple_type in type_sequence_1[::-1]:
-        concat_type_1 = SimpleType(left=simple_type, right=concat_type_1)
-    for simple_type in type_sequence_2[::-1]:
-        concat_type_2 = SimpleType(left=simple_type, right=concat_type_2)
-
-    return fresh_most_general_unifier(concat_type_1, concat_type_2, disallowed_type_variables)
-
-
-def principal_type_algorithm(lambda_term: LambdaTerm,
-                             disallowed_type_variables: frozenset[str] = frozenset()) -> Optional[Deduction]:
-    """
-    :param lambda_term:
-    :param disallowed_type_variables:
-    :return: A principal deduction without any disallowed type variables for lambda_term if it exists
-
-    >>> print(principal_type_algorithm(LambdaTerm(left=LambdaTerm(variable='x'),
-    ...                                           right=LambdaTerm(variable='x'))))
-    None
-    """
-    if lambda_term.is_variable():
-        next_index: int = 1
-        while 'a_{' + str(next_index) + '}' in disallowed_type_variables:
-            next_index += 1
-        type_variable: SimpleType = SimpleType(variable='a_{' + str(next_index) + '}')
-        # return Deduction(TypeContext({lambda_term.variable: type_variable}), lambda_term, type_variable, 'variable', [])
-        return Deduction(TypeContext({lambda_term.variable: type_variable}), lambda_term, type_variable, 'var', [])
-
-    if lambda_term.is_abstraction():
-        sub_deduction: Deduction = principal_type_algorithm(lambda_term.left_subterm, disallowed_type_variables)
-        if sub_deduction is None:
-            return None
-        if lambda_term.variable in lambda_term.left_subterm.free_variables():
-            type_context, abstracted_type = sub_deduction.type_context.remove(lambda_term.variable)
-            # return Deduction(type_context, lambda_term,
-            #                  SimpleType(left_subtype=abstracted_type, right_subtype=sub_deduction.simple_type),
-            #                  'abstraction-main', [sub_deduction])
-            return Deduction(type_context, lambda_term,
-                             SimpleType(left=abstracted_type, right=sub_deduction.simple_type),
-                             'abs-main', [sub_deduction])
-        next_index: int = 1
-        used_type_variables = sub_deduction.type_variables() | disallowed_type_variables
-        while 'a_{' + str(next_index) + '}' in used_type_variables:
-            next_index += 1
-        # return Deduction(sub_deduction.type_context, lambda_term,
-        #                  SimpleType(left_subtype=SimpleType(variable=f'a_{next_index}'),
-        #                             right_subtype=sub_deduction.simple_type),
-        #                  'abstraction-vac', [sub_deduction])
-        return Deduction(sub_deduction.type_context, lambda_term,
-                         SimpleType(left=SimpleType(variable='a_{' + str(next_index) + '}'),
-                                    right=sub_deduction.simple_type),
-                         'abs-vac', [sub_deduction])
-
-    left_sub_deduction: Deduction = principal_type_algorithm(lambda_term.left_subterm, disallowed_type_variables)
-    if left_sub_deduction is None:
-        return None
-    right_sub_deduction: Deduction = principal_type_algorithm(lambda_term.right_subterm,
-                                                              (left_sub_deduction.type_variables()
-                                                               | disallowed_type_variables))
-    if right_sub_deduction is None:
-        return None
-
-    common_free_variables: list[str] = list(lambda_term.left_subterm.free_variables()
-                                            & lambda_term.right_subterm.free_variables())
-    left_types: list[SimpleType] = [left_sub_deduction.type_context[var] for var in common_free_variables]
-    right_types: list[SimpleType] = [right_sub_deduction.type_context[var] for var in common_free_variables]
-
-    if left_sub_deduction.simple_type.is_variable():
-        left_types.append(left_sub_deduction.simple_type)
-        used_type_variables = (left_sub_deduction.type_variables()
-                               | right_sub_deduction.type_variables()
-                               | disallowed_type_variables)
-        next_index: int = 1
-        while 'a_{' + str(next_index) + '}' in used_type_variables:
-            next_index += 1
-        right_types.append(SimpleType(left=right_sub_deduction.simple_type,
-                                      right=SimpleType(variable='a_{' + str(next_index) + '}')))
-    else:
-        left_types.append(left_sub_deduction.simple_type.left_subtype)
-        right_types.append(right_sub_deduction.simple_type)
-
-    mgu_domain: frozenset[str] = frozenset()
-    for simple_type in left_types:
-        mgu_domain |= simple_type.variables()
-    for simple_type in right_types:
-        mgu_domain |= simple_type.variables()
-
-    unifier: Optional[TypeSubstitution] = sequence_most_general_unifier(left_types, right_types,
-                                                                        ((left_sub_deduction.type_variables()
-                                                                          | right_sub_deduction.type_variables())
-                                                                         - mgu_domain))
-    if unifier is None:
-        return None
-
-    left_sub_deduction = unifier * left_sub_deduction
-    right_sub_deduction = unifier * right_sub_deduction
-
-    # return Deduction(left_sub_deduction.type_context | right_sub_deduction.type_context,
-    #                  LambdaTerm(left_subterm=lambda_term.left_subterm, right_subterm=lambda_term.right_subterm),
-    #                  left_sub_deduction.simple_type.right_subtype, 'application',
-    #                  [left_sub_deduction, right_sub_deduction])
-    return Deduction(left_sub_deduction.type_context | right_sub_deduction.type_context,
-                     LambdaTerm(left=lambda_term.left_subterm, right=lambda_term.right_subterm),
-                     left_sub_deduction.simple_type.right_subtype, 'app',
-                     [left_sub_deduction, right_sub_deduction])
-
-
 if __name__ == '__main__':
     version = ''
     while version not in ('1', '2'):
         version = input('Enter 1 for beta-eta and 2 for typing.\n')
     if version == '1':
         print('Welcome to the Bussproof Aid')
-        l_term: LambdaTerm = string_to_lambda_term(input('Please enter the left term.\n'))
-        r_term: LambdaTerm = string_to_lambda_term(input('Please enter the right term.\n'))
-        print(construct_beta_eta_tree(l_term, r_term))
+        l_term: LambdaTerm = LambdaTerm.string_to_lambda_term(input('Please enter the left term.\n'))
+        r_term: LambdaTerm = LambdaTerm.string_to_lambda_term(input('Please enter the right term.\n'))
+        print(BetaEtaTree.construct_beta_eta_tree(l_term, r_term))
     else:
-        print(principal_type_algorithm(string_to_lambda_term(input('Please enter the lambda term to type.\n'))))
+        print(DeductionTree.principal_type_algorithm(LambdaTerm.string_to_lambda_term(
+            input('Please enter the lambda term to type.\n'))))
