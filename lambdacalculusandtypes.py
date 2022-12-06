@@ -1,6 +1,6 @@
 """A module to aid in Lambda Calculus and Types computations."""
 
-from typing import Union, Optional, Iterable, Mapping
+from typing import Union, Optional, Iterable, Mapping, Sequence
 from frozendict import frozendict
 from abc import ABC, abstractmethod
 
@@ -125,10 +125,15 @@ class LambdaTerm:
     def string_to_lambda_term(cls, lambda_term_string: str) -> 'LambdaTerm':
         r"""Given a string representing a lambda term, return the represented term.
 
-        :param lambda_term_string: A string representing a lambda term where variables are one character
-        and there are no extra parentheses.
+        :param lambda_term_string: A string representing a lambda term where variables are one character.
         :return: The LambdaTerm represented by lambda_term_string.
 
+        >>> l = LambdaTerm.string_to_lambda_term(r'xyz')
+        >>> print(l)
+        xyz
+        >>> l = LambdaTerm.string_to_lambda_term(r'((((x)(y))(z)))')
+        >>> print(l)
+        xyz
         >>> l = LambdaTerm.string_to_lambda_term(r'\lambda y.y')
         >>> print(l)
         \lambda y.y
@@ -136,11 +141,11 @@ class LambdaTerm:
         >>> print(l)
         (\lambda y.y)x
         """
-        # if it's a variable
+        # if it's a variable with no outer parentheses
         if len(lambda_term_string) == 1:
             return cls(variable=lambda_term_string)
 
-        # if it's an abstraction
+        # if it's an abstraction with no outer parentheses
         if lambda_term_string.startswith(r'\lambda '):
             end_of_abstracted_variables = lambda_term_string.find('.')
             if end_of_abstracted_variables == 9:
@@ -149,8 +154,8 @@ class LambdaTerm:
             return cls(variable=lambda_term_string[8],
                        left_subterm=cls.string_to_lambda_term(fr'\lambda {lambda_term_string[9:]}'))
 
-        # if it's an application
-        application_string_list: list[str] = cls.split_lambda_term_string_into_applications(lambda_term_string)
+        # if it's an application or has outer parentheses
+        application_string_list: list[str] = cls._strip_or_split_lambda_term_string(lambda_term_string)
         application_list: list[cls] = [cls.string_to_lambda_term(term_string)
                                        for term_string in application_string_list]
         application_list.reverse()
@@ -160,9 +165,9 @@ class LambdaTerm:
         return current_term
 
     @classmethod
-    def split_lambda_term_string_into_applications(cls, lambda_term_string: str) -> list[str]:
-        """Given a string representing a lambda term,
-        it maximally splits the string into a list of the form [s, t, u, v, w],
+    def _strip_or_split_lambda_term_string(cls, lambda_term_string: str) -> list[str]:
+        """Given a string representing a lambda term, if it has outer parentheses it strips them,
+        otherwise it maximally splits the string into a list of the form [s, t, u, v, w],
         where each entry is a string representing a subterm of the original term,
         and such that for s', t', u', v', w' being the terms represented by the entries,
         the original term equals s't'u'v'w'
@@ -179,7 +184,7 @@ class LambdaTerm:
 
         # if it starts with a variable
         if not lambda_term_string.startswith('('):
-            return [lambda_term_string[0]] + cls.split_lambda_term_string_into_applications(lambda_term_string[1:])
+            return [lambda_term_string[0]] + cls._strip_or_split_lambda_term_string(lambda_term_string[1:])
 
         # if it starts with an open parenthesis
         end_of_first_term: int = 0
@@ -191,7 +196,7 @@ class LambdaTerm:
             elif lambda_term_string[end_of_first_term] == ')':
                 open_parentheses -= 1
         return ([lambda_term_string[1:end_of_first_term]]
-                + cls.split_lambda_term_string_into_applications(lambda_term_string[end_of_first_term + 1:]))
+                + cls._strip_or_split_lambda_term_string(lambda_term_string[end_of_first_term + 1:]))
 
     def is_variable(self) -> bool:
         """:return: True iff it is a variable."""
@@ -789,8 +794,8 @@ class TypeContext:
         return TypeContext(self.type_assignments.delete(variable)), self.type_assignments[variable]
 
 
-class DeductionTree(ProofTree):
-    """A deduction tree.
+class Deduction(ProofTree):
+    """A type deduction.
 
     === Public Attributes ===
     type_context:
@@ -803,17 +808,17 @@ class DeductionTree(ProofTree):
     type_context: TypeContext
     lambda_term: LambdaTerm
     simple_type: SimpleType
-    children: tuple['DeductionTree', ...]
+    children: tuple['Deduction', ...]
 
     def __init__(self, type_context: TypeContext, lambda_term: LambdaTerm, simple_type: SimpleType, label: str,
-                 children: Iterable['DeductionTree']):
+                 children: Iterable['Deduction']):
         self.type_context = type_context
         self.lambda_term = lambda_term
         self.simple_type = simple_type
         super().__init__(label, children)
 
     def __eq__(self, other):
-        return (isinstance(other, DeductionTree)
+        return (isinstance(other, Deduction)
                 and (self.type_context, self.lambda_term, self.simple_type, self.label, self.children)
                 == (other.type_context, other.lambda_term, other.simple_type, self.label, other.children))
 
@@ -834,14 +839,14 @@ class DeductionTree(ProofTree):
 
     @classmethod
     def principal_type_algorithm(cls, lambda_term: LambdaTerm,
-                                 disallowed_type_variables: frozenset[str] = frozenset()) -> Optional['DeductionTree']:
-        """
-        :param lambda_term:
-        :param disallowed_type_variables:
-        :return: A principal deduction without any disallowed type variables for lambda_term if it exists
+                                 disallowed_type_variables: frozenset[str] = frozenset()) -> Optional['Deduction']:
+        """Given a LambdaTerm, decide if it's typable, and if so return a principal deduction tree.
 
-        >>> print(DeductionTree.principal_type_algorithm(LambdaTerm(left_subterm=LambdaTerm(variable='x'),
-        ...                                           right_subterm=LambdaTerm(variable='x'))))
+        :param lambda_term:
+        :param disallowed_type_variables: Type variables that cannot occur in the principal deduction tree.
+        :return: A principal deduction for lambda_term if it exists without any disallowed type variables.
+
+        >>> print(Deduction.principal_type_algorithm(LambdaTerm.string_to_lambda_term('xx')))
         None
         """
         if lambda_term.is_variable():
@@ -849,8 +854,7 @@ class DeductionTree(ProofTree):
             while 'a_{' + str(next_index) + '}' in disallowed_type_variables:
                 next_index += 1
             type_variable: SimpleType = SimpleType(variable='a_{' + str(next_index) + '}')
-            return cls(TypeContext({lambda_term.variable: type_variable}), lambda_term, type_variable, 'var',
-                                 [])
+            return cls(TypeContext({lambda_term.variable: type_variable}), lambda_term, type_variable, 'var', tuple())
 
         if lambda_term.is_abstraction():
             sub_deduction: cls = cls.principal_type_algorithm(lambda_term.left_subterm, disallowed_type_variables)
@@ -858,37 +862,29 @@ class DeductionTree(ProofTree):
                 return None
             if lambda_term.variable in lambda_term.left_subterm.free_variables():
                 type_context, abstracted_type = sub_deduction.type_context.remove(lambda_term.variable)
-                # return Deduction(type_context, lambda_term,
-                #                  SimpleType(left_subtype=abstracted_type, right_subtype=sub_deduction.simple_type),
-                #                  'abstraction-main', [sub_deduction])
                 return cls(type_context, lambda_term,
-                                     SimpleType(left_subtype=abstracted_type, right_subtype=sub_deduction.simple_type),
-                                     'abs-main', [sub_deduction])
+                           SimpleType(left_subtype=abstracted_type, right_subtype=sub_deduction.simple_type),
+                           'abs-main', (sub_deduction,))
             next_index: int = 1
-            used_type_variables = sub_deduction.type_variables() | disallowed_type_variables
+            used_type_variables: frozenset[str] = sub_deduction.type_variables() | disallowed_type_variables
             while 'a_{' + str(next_index) + '}' in used_type_variables:
                 next_index += 1
-            # return Deduction(sub_deduction.type_context, lambda_term,
-            #                  SimpleType(left_subtype=SimpleType(variable=f'a_{next_index}'),
-            #                             right_subtype=sub_deduction.simple_type),
-            #                  'abstraction-vac', [sub_deduction])
             return cls(sub_deduction.type_context, lambda_term,
-                                 SimpleType(left_subtype=SimpleType(variable='a_{' + str(next_index) + '}'),
-                                            right_subtype=sub_deduction.simple_type),
-                                 'abs-vac', [sub_deduction])
+                       SimpleType(left_subtype=SimpleType(variable='a_{' + str(next_index) + '}'),
+                                  right_subtype=sub_deduction.simple_type),
+                       'abs-vac', (sub_deduction,))
 
-        left_sub_deduction: cls = cls.principal_type_algorithm(lambda_term.left_subterm,
-                                                                     disallowed_type_variables)
+        left_sub_deduction: cls = cls.principal_type_algorithm(lambda_term.left_subterm, disallowed_type_variables)
         if left_sub_deduction is None:
             return None
         right_sub_deduction: cls = cls.principal_type_algorithm(lambda_term.right_subterm,
-                                                                      (left_sub_deduction.type_variables()
-                                                                       | disallowed_type_variables))
+                                                                (left_sub_deduction.type_variables()
+                                                                 | disallowed_type_variables))
         if right_sub_deduction is None:
             return None
 
-        common_free_variables: list[str] = list(lambda_term.left_subterm.free_variables()
-                                                & lambda_term.right_subterm.free_variables())
+        common_free_variables: tuple[str] = tuple(lambda_term.left_subterm.free_variables()
+                                                  & lambda_term.right_subterm.free_variables())
         left_types: list[SimpleType] = [left_sub_deduction.type_context[var] for var in common_free_variables]
         right_types: list[SimpleType] = [right_sub_deduction.type_context[var] for var in common_free_variables]
 
@@ -912,11 +908,7 @@ class DeductionTree(ProofTree):
         for simple_type in right_types:
             mgu_domain |= simple_type.variables()
 
-        unifier: Optional[TypeSubstitution] = TypeSubstitution.sequence_most_general_unifier(left_types, right_types,
-                                                                                             ((
-                                                                                                          left_sub_deduction.type_variables()
-                                                                                                          | right_sub_deduction.type_variables())
-                                                                                              - mgu_domain))
+        unifier: Optional[TypeSubstitution] = TypeSubstitution.sequence_most_general_unifier(left_types, right_types)
         if unifier is None:
             return None
 
@@ -924,9 +916,9 @@ class DeductionTree(ProofTree):
         right_sub_deduction = unifier * right_sub_deduction
 
         return cls(left_sub_deduction.type_context | right_sub_deduction.type_context,
-                             LambdaTerm(left_subterm=lambda_term.left_subterm, right_subterm=lambda_term.right_subterm),
-                             left_sub_deduction.simple_type.right_subtype, 'app',
-                             [left_sub_deduction, right_sub_deduction])
+                   LambdaTerm(left_subterm=lambda_term.left_subterm, right_subterm=lambda_term.right_subterm),
+                   left_sub_deduction.simple_type.right_subtype, 'app',
+                   (left_sub_deduction, right_sub_deduction))
 
 
 class TypeSubstitution:
@@ -975,9 +967,9 @@ class TypeSubstitution:
         if isinstance(other, TypeContext):
             return TypeContext({var: self * simple_type for var, simple_type in other.type_assignments.items()})
 
-        if isinstance(other, DeductionTree):
-            return DeductionTree(self * other.type_context, other.lambda_term, self * other.simple_type, other.label,
-                                 (self * child for child in other.children))
+        if isinstance(other, Deduction):
+            return Deduction(self * other.type_context, other.lambda_term, self * other.simple_type, other.label,
+                             (self * child for child in other.children))
 
         if isinstance(other, TypeSubstitution):
             return TypeSubstitution(
@@ -1042,53 +1034,16 @@ class TypeSubstitution:
         return right_unifier * left_unifier
 
     @classmethod
-    def fresh_most_general_unifier(cls, type_1: SimpleType, type_2: SimpleType,
-                                   disallowed_type_variables: frozenset[str]) -> Optional['TypeSubstitution']:
-        """Return a most general unifier for type_1 and type_2 if one exists,
-        with domain restricted to the variables occuring in type_1 or type_2,
-        where the most general unification does not contain the disallowed types.
-        If no most general unifier exists, return None.
-
-        :param type_1:
-        :param type_2:
-        :param disallowed_type_variables: The types that cannot appear in the most general unification.
-        :return: A most general unifier for type_1 and type_2 if one exists,
-        with domain restricted to the variables occuring in type_1 or type_2,
-        where the most general unification does not contain the disallowed types.
-        If no most general unifier exists, return None.
-        """
-        mgu: cls = cls.most_general_unifier(type_1, type_2)
-        if mgu is None:
-            return None
-
-        current_variables: frozenset[str] = (mgu * type_1).variables()
-        problem_variables: frozenset[str] = (mgu * type_1).variables() & disallowed_type_variables
-        used_variables: set[str] = set(current_variables | disallowed_type_variables)
-        next_index: int = 1
-        for type_variable in problem_variables:
-            while f'a_{next_index}' in used_variables:
-                next_index += 1
-            new_variable: str = 'a_{' + str(next_index) + '}'
-            mgu = cls({type_variable: SimpleType(variable=new_variable)}) * mgu
-            used_variables.add(new_variable)
-
-        return mgu
-
-    @classmethod
-    def sequence_most_general_unifier(cls, type_sequence_1: list[SimpleType], type_sequence_2: list[SimpleType],
-                                      disallowed_type_variables: frozenset[str] = frozenset()
-                                      ) -> Optional['TypeSubstitution']:
+    def sequence_most_general_unifier(cls, type_sequence_1: Sequence[SimpleType],
+                                      type_sequence_2: Sequence[SimpleType]) -> Optional['TypeSubstitution']:
         """Return a most general unifier for the sequences type_sequence_1 and type_sequence_2 if one exists,
-        with domain restricted to the variables occuring in type_sequence_1 or type_sequence_2,
-        where the most general unification does not contain the disallowed types.
+        with domain and range restricted to the variables occuring in type_sequence_1 or type_sequence_2.
         If the sequences are of different length or no most general unifier exists, return None.
 
         :param type_sequence_1: A sequence of types.
         :param type_sequence_2: A sequence of types.
-        :param disallowed_type_variables: The types that cannot appear in the most general unification.
         :return: A most general unifier for the sequences type_sequence_1 and type_sequence_2 if one exists,
-        with domain restricted to the variables occuring in type_sequence_1 or type_sequence_2,
-        where the most general unification does not contain the disallowed types.
+        with domain and range restricted to the variables occuring in type_sequence_1 or type_sequence_2.
         If the sequences are of different length or no most general unifier exists, return None.
         """
         if len(type_sequence_1) != len(type_sequence_2):
@@ -1101,115 +1056,7 @@ class TypeSubstitution:
         for simple_type in type_sequence_2[1:]:
             concat_type_2 = SimpleType(left_subtype=concat_type_2, right_subtype=simple_type)
 
-        return cls.fresh_most_general_unifier(concat_type_1, concat_type_2, disallowed_type_variables)
-
-
-def get_term_type_assignment_from_context_or_user(lambda_term: LambdaTerm, type_context: TypeContext) -> SimpleType:
-    """Given a lambda term and a type context, deduce the type of the lambda term,
-    potentially using input from the user to do so.
-
-    :param type_context:
-    :param lambda_term:
-    :return: The type of lambda_term.
-    """
-    if lambda_term.is_variable() and lambda_term.variable in type_context.type_assignments:
-        return type_context.type_assignments[lambda_term.variable]
-    return SimpleType.string_to_type(input(f'What is the type of {lambda_term}?\n'))
-
-
-def construct_typing_proof_tree() -> str:
-    """
-
-    :return:
-    :rtype:
-    """
-    print('Welcome to the Bussproof Aid.')
-
-    type_context_dict: dict[str, SimpleType] = {}
-
-    variable: str = input('Enter the first variable in the type context or the empty string if the context is empty.\n')
-    while variable:
-        type_context_dict[variable] = SimpleType.string_to_type(
-            input('Enter the type of the variable in the format (a>b)>(c>a)>d\n'))
-        variable = input('Enter the next variable in the type context or the empty string if the context is empty.\n')
-
-    starting_type_context: TypeContext = TypeContext(type_context_dict)
-    starting_term: LambdaTerm = LambdaTerm.string_to_lambda_term(
-        input('Please enter the lambda term you wish to type.\n'))
-    starting_type: SimpleType = SimpleType.string_to_type(input('Please enter the type.\n'))
-
-    proof_tree: dict[tuple[TypeContext, LambdaTerm, SimpleType], tuple[
-        str, int, list[tuple[TypeContext, LambdaTerm, SimpleType]]]] = {}
-    unproven_statements_and_depth: list[tuple[tuple[TypeContext, LambdaTerm, SimpleType], int]] = [
-        ((starting_type_context, starting_term, starting_type), 0)]
-
-    while unproven_statements_and_depth:
-        statement, depth = unproven_statements_and_depth.pop()
-        type_context, lambda_term, simple_type = statement
-
-        if lambda_term.is_variable():
-            proof_tree[(type_context, lambda_term, simple_type)] = ('variable', depth, [])
-        elif lambda_term.is_application():
-            right_subterm_type: SimpleType = get_term_type_assignment_from_context_or_user(lambda_term.right_subterm,
-                                                                                           type_context)
-
-            left_subterm_context: TypeContext = type_context.restriction(lambda_term.left_subterm.free_variables())
-
-            right_subterm_context: TypeContext = type_context.restriction(lambda_term.right_subterm.free_variables())
-
-            left_child: tuple[TypeContext, LambdaTerm, SimpleType] = (left_subterm_context, lambda_term.left_subterm,
-                                                                      SimpleType(left_subtype=right_subterm_type,
-                                                                                 right_subtype=simple_type))
-
-            right_child: tuple[TypeContext, LambdaTerm, SimpleType] = (
-                right_subterm_context, lambda_term.right_subterm, right_subterm_type)
-
-            proof_tree[(type_context, lambda_term, simple_type)] = ('application', depth, [right_child, left_child])
-            unproven_statements_and_depth.extend([(left_child, depth + 1), (right_child, depth + 1)])
-
-        else:
-            assert lambda_term.is_abstraction()
-            child_type_context: TypeContext
-            abstraction_type: str
-            if lambda_term.variable in lambda_term.left_subterm.free_variables():
-                child_type_context = type_context.set(lambda_term.variable, simple_type.left_subtype)
-                abstraction_type = 'abstraction-main'
-            else:
-                child_type_context = type_context
-                abstraction_type = 'abstraction-vac'
-            child: tuple[TypeContext, LambdaTerm, SimpleType] = (
-                child_type_context, lambda_term.left_subterm, simple_type.right_subtype)
-            proof_tree[(type_context, lambda_term, simple_type)] = (abstraction_type, depth, [child])
-            unproven_statements_and_depth.append((child, depth + 1))
-
-    proof_string: str = r'\end{prooftree}'
-    unproven_statements: list[tuple[TypeContext, LambdaTerm, SimpleType]] = [
-        (starting_type_context, starting_term, starting_type)]
-    while unproven_statements:
-        statement = unproven_statements.pop()
-        type_context, lambda_term, simple_type = statement
-        rule, depth, children = proof_tree[statement]
-        unproven_statements.extend(children[::-1])
-
-        if rule == 'variable':
-            proof_string = ('\t' * depth
-                            + r'\UnaryInfC{\(' + fr'{type_context} \mapsto {lambda_term} : {simple_type}' + r'\)}'
-                            + f'\n{proof_string}')
-            proof_string = '\t' * depth + r'\LeftLabel{(variable)}' + f'\n{proof_string}'
-            proof_string = '\t' * (depth + 1) + r'\AxiomC{}' + f'\n{proof_string}'
-        elif rule == 'application':
-            proof_string = ('\t' * depth
-                            + r'\BinaryInfC{\(' + fr'{type_context} \mapsto {lambda_term} : {simple_type}' + r'\)}'
-                            + f'\n{proof_string}')
-            proof_string = '\t' * depth + r'\LeftLabel{(application)}' + f'\n{proof_string}'
-        else:
-            proof_string = ('\t' * depth
-                            + r'\UnaryInfC{\(' + fr'{type_context} \mapsto {lambda_term} : {simple_type}' + r'\)}'
-                            + f'\n{proof_string}')
-            proof_string = '\t' * depth + r'\LeftLabel{(' + rule + ')}' + f'\n{proof_string}'
-    proof_string = r'\begin{prooftree}' + f'\n{proof_string}'
-    proof_string = proof_string.replace('>', r' \Rightarrow ')
-    return proof_string
+        return cls.most_general_unifier(concat_type_1, concat_type_2)
 
 
 if __name__ == '__main__':
@@ -1222,5 +1069,5 @@ if __name__ == '__main__':
         r_term: LambdaTerm = LambdaTerm.string_to_lambda_term(input('Please enter the right term.\n'))
         print(BetaEtaTree.construct_beta_eta_tree(l_term, r_term))
     else:
-        print(DeductionTree.principal_type_algorithm(LambdaTerm.string_to_lambda_term(
+        print(Deduction.principal_type_algorithm(LambdaTerm.string_to_lambda_term(
             input('Please enter the lambda term to type.\n'))))
